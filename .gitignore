@@ -1,4 +1,5 @@
 data/
 .idea/
+.ipynb_checkpoints/
 *.class
 *.log
