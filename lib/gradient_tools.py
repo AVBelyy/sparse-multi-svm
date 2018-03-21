@@ -1,6 +1,5 @@
 import numpy as np
 import fibonacci_heap_mod as fhm
-from scipy.sparse.linalg import norm
 
 class GradientUpdateTool(object):
     """
@@ -25,7 +24,7 @@ class GradientUpdateTool(object):
 
 class BasicGradientUpdater(GradientUpdateTool):
 
-    def __init__(self, g):
+    def __init__(self, g: np.array):
         self.__g = g
 
     def get_coordinate(self):
@@ -41,7 +40,7 @@ class BasicGradientUpdater(GradientUpdateTool):
         return self.__g
 
     def get_norm(self):
-        return norm(self.__g)
+        return np.linalg.norm(self.__g)
 
 
 class HeapGradientUpdater(GradientUpdateTool):
@@ -64,7 +63,7 @@ class HeapGradientUpdater(GradientUpdateTool):
         g_elems = self.__g_elements
         heap = self.__heap
 
-        for k in delta.nonzero()[1]:
+        for k in delta.nonzero()[1]: # TODO: delta.indices
             old_priority = g_elems[k].get_priority()
             new_priority = old_priority + delta[0, k]
             if old_priority > new_priority:
