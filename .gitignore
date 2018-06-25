@@ -1,5 +1,14 @@
 data/
 .idea/
 .ipynb_checkpoints/
+__pycache__/
+paper/
+experiments/nmslib
+experiments/pegasos
 *.class
 *.log
+.DS_Store
+*.png
+*.eps
+*.mdl
+*.dump

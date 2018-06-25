@@ -54,6 +54,9 @@ def dense_sparse_mul(a: np.array, b: csr_matrix, inplace=False):
     out.data *= a[b.indices]
     return out
 
+def dense_sparse_dot(a: np.array, b: csr_matrix):
+    return np.dot(b.data, a[b.indices])
+
 def sparse_sub_with_clip(a: csr_matrix, c):
     out = a.copy()
     out.data -= c
