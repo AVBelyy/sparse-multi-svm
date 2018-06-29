@@ -2,22 +2,23 @@
 
 import os, pickle
 import collections
+from typing import List
+
 import numpy as np
 import scipy.sparse as ss
+from joblib import Parallel, delayed
+from sklearn.preprocessing import normalize
 
 from lib.sparse_tools import dense_sparse_dot, dense_sparse_add, sparse_sparse_dot
-from lib.argmax_tools import ANNArgmax
+from lib.argmax_tools import ANNArgmax, BruteforceArgmax
 from tqdm import tqdm
 
-# Available datasets.
-datasets_names = ("LSHTC1", "DMOZ", "WIKI_Small", "WIKI_50K", "WIKI_100K")
-dataset_dir = "../data"
-out_dir = "../data/parsed"
-
 # Read the dataset.
+out_dir = "../data/parsed"
 
 # dataset_name = "WIKI_100K"
 dataset_name = "LSHTC1"
+# dataset_name = "20newsgroups"
 
 with open(os.path.join(out_dir, "%s_train.dump" % dataset_name), "rb") as fin:
     X_train = pickle.load(fin)
@@ -77,6 +78,12 @@ class WeightVector:
     def sparse_add(self, u: ss.csr_matrix, s: float):
         dense_sparse_add(self.v, u * (s / self.a), inplace=True)
 
+    def elem_add(self, ix: int, s: float):
+        self.v[ix] += (s / self.a)
+
+    def elem_get(self, ix: int):
+        return self.v[ix] * self.a
+
     def add(self, other, s: float):
         self.v *= self.a
         self.v += other.v * other.a * s
@@ -98,18 +105,21 @@ Matrix in a form: a * [v_i], i=1...n
 
 
 class WeightMatrix:
-    # TODO: add squared norm
-
-    def __init__(self, dim):
+    def __init__(self, dim, dtype=np.float32):
         self.dim = n, d = dim
+        self.dtype = dtype
         self.a = 1.0
-        self.m = [ss.csr_matrix((1, d), dtype=np.float32) for _ in range(n)]
+        self.snorm = 0.
+        self.m = [ss.csr_matrix((1, d), dtype=dtype) for _ in range(n)]
 
     def sparse_dot(self, ix: int, v: ss.csr_matrix):
         return sparse_sparse_dot(self.m[ix], v) * self.a
 
     def sparse_add(self, ix: int, v: ss.csr_matrix, s: float):
+        old_ix_norm = np.dot(self.m[ix].data, self.m[ix].data)
         self.m[ix] += v * (s / self.a)
+        new_ix_norm = np.dot(self.m[ix].data, self.m[ix].data)
+        self.snorm += (new_ix_norm - old_ix_norm) * (self.a * self.a)
         return self.m[ix] * self.a
 
     def scale(self, s: float):
@@ -117,6 +127,7 @@ class WeightMatrix:
             self.__init__(self.dim)
         else:
             self.a *= s
+            self.snorm *= (s * s)
 
 
 def stochastic_pegasos(X: np.array, y: np.array, pos_class: int, random_seed=None) -> np.ndarray:
@@ -173,13 +184,13 @@ def multi_pegasos(X: np.array, y: np.array, random_seed=None) -> WeightMatrix:
     n, d = X.shape
 
     # TODO: make parameters
-    max_iter = 6000
-    lambd = 0.0005
-    k = 100
-
-    Wyx = np.zeros(n, dtype=np.float32)
+    max_iter = 50000
+    lambd = 10
+    k = 10
 
     W = WeightMatrix((n_classes, d))
+    # Wyx = WeightVector(n)
+
     # amax = BruteforceArgmax(W)
     amax = ANNArgmax()
 
@@ -189,42 +200,61 @@ def multi_pegasos(X: np.array, y: np.array, random_seed=None) -> WeightMatrix:
 
     # avg_scale = min(max_iter, num_to_avg)
     # avg_wv = WeightVector(d)
+    amax_multiplier = 1.
 
     for i in tqdm(range(max_iter)):
         x_ids = random_ids[i * k: (i + 1) * k]
         xs = X[x_ids]
         eta = 1. / (lambd * (i + 2))
+
         ys = y[x_ids]
-        rs, dists = amax.query(xs)
+        rs = amax.query(xs, ys)
         grad_ixs, grad_weights = [], []
-        for j_, y_, r_, dr, x_ in zip(x_ids, ys, rs, dists, xs):
-            loss = max(0, 1 + (-dr) - Wyx[j_])
+
+        for j_, y_, r_, x_ in zip(x_ids, ys, rs, xs):
+            # loss = max(0, 1 + (-dr) - Wyx.elem_get(j_))
+            # TODO: use wrx from dists
+            wrx = W.sparse_dot(r_, x_)
+            wyx = W.sparse_dot(y_, x_)
+            loss = 1 + wrx - wyx
             if loss > 0:
                 grad_ixs.append((y_, j_))
                 grad_weights.append(+eta / k)
                 grad_ixs.append((r_, j_))
                 grad_weights.append(-eta / k)
-        # Scale weight matrix
-        W.scale(1. - eta * lambd)
+        # Scale weight matrix and Wyx cache matrix
+        iter_scale = 1. - eta * lambd
+        W.scale(iter_scale)
+        amax_multiplier *= iter_scale
+        # Wyx.scale(iter_scale)
         # Add sub-gradients and project rows onto a sphere of r=1
-        update = {}
+        amax_update = {}
         for (class_ix, obj_ix), grad_w in zip(grad_ixs, grad_weights):
             obj = X.getrow(obj_ix)
             upd = W.sparse_add(class_ix, obj, grad_w)
-            # Incrementally update <w_yk, xk> structure
-            for x_ix in classes_objects[class_ix]:
-                Wyx[x_ix] += sparse_sparse_dot(X.getrow(x_ix), obj) * grad_w
-            # TODO: UNNEEDED?
-            # upd.data *= min(1., 1. / np.sqrt(lambd * np.dot(upd.data, upd.data)))
+            # Incrementally update Wyx (<w_yk, xk>) cache matrix
+            # for x_ix in classes_objects[class_ix]:
+            #     Wyx.elem_add(x_ix, sparse_sparse_dot(X.getrow(x_ix), obj) * grad_w)
             if upd.nnz > 0:
-                update[class_ix] = upd
+                upd.data /= amax_multiplier
+                amax_update[class_ix] = upd
                 # TODO: we should delete zero vectors
-        if len(update) > 0:
-            class_ixs = list(update.keys())
-            new_values = ss.vstack(list(update.values()))
+        # Normalize weight matrix and Wyx cache matrix
+        iter_norm = min(1., 1. / np.sqrt(lambd * W.snorm))
+        W.scale(iter_norm)
+        amax_multiplier *= iter_norm
+        # Wyx.scale(iter_norm)
+        if len(amax_update) > 0:
+            class_ixs = list(amax_update.keys())
+            new_values = ss.vstack(list(amax_update.values()))
             amax.update(class_ixs, new_values)
-        if i % 250 == 0:
-            print("iter #%6i, W sparsity: %.9f" % (i, sum([x.nnz for x in W.m]) / (len(W.m) * W.m[0].shape[1])))
+        if i % 1000 == 0:
+            print()
+            print("Argmax multiplier: %.9f" % (1. / amax_multiplier))
+            print("Iter #%6i, W sparsity: %.9f" % (i, sum([x.nnz for x in W.m]) / (len(W.m) * W.m[0].shape[1])))
+            print()
+            with open("W.dump", "wb") as fout:
+                pickle.dump(W, fout)
 
     return W
 
