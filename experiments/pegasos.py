@@ -84,6 +84,15 @@ def predict(X, W_nz, nz_to_z):
             pred.append(class_id)
     return pred
 
+def predict_dot(X, index):
+    pred = []
+    for x_chunk in chunks(X, predict_chunk_size):
+        results = index.knnQueryBatch(x_chunk, k=1, num_threads=predict_num_threads)
+        for x, (nn_ids, _) in zip(x_chunk, results):
+            class_id = nn_ids[0]
+            pred.append(class_id)
+    return pred
+
 # Load Iris datasets
 # from sklearn.datasets import load_iris
 # from sklearn.model_selection import train_test_split
@@ -223,9 +232,9 @@ def multi_pegasos(X: np.array, y: np.array, random_seed=None) -> WeightMatrix:
     n, d = X.shape
 
     # TODO: make parameters
-    max_iter = 1000000
+    max_iter = 300
     lambd = 10.
-    k = 10
+    k = 100
 
     W = WeightMatrix((n_classes, d))
     # Wyx = WeightVector(n)
@@ -248,13 +257,13 @@ def multi_pegasos(X: np.array, y: np.array, random_seed=None) -> WeightMatrix:
     learning_time = 0.
 
     with open("log_%s.txt" % dataset_name, "w") as fout:
-        fout.write("i,learning_time,maf1,mif1,amax_multiplier,nnz_sum,sparsity\n")
+        fout.write("i,learning_time,maf1,mif1,maf1_dot,mif1_dot,amax_multiplier,nnz_sum,sparsity\n")
 
     for i in tqdm(range(max_iter)):
         iter_start = time.time()
         x_ids = random_ids[i * k: (i + 1) * k]
         xs = X[x_ids]
-        eta = 1. / (lambd * (i + 2))
+        eta = 1. / (lambd * (1. * np.ceil((i + 1) / 1.) + 1))
 
         ys = y[x_ids]
         rs = amax.query(xs, ys)
@@ -305,7 +314,7 @@ def multi_pegasos(X: np.array, y: np.array, random_seed=None) -> WeightMatrix:
         #     res = amax.index.knnQueryBatch(W.m[12] * W.a, k=1)
         #     print(res)
 
-        if i % 1000 == 0 and i > 0:
+        if i % 100 == 0 and i > 0:
             # Save intermediate W matrix
             with open("W_%s.dump" % dataset_name, "wb") as fout:
                 pickle.dump(W, fout)
@@ -318,9 +327,12 @@ def multi_pegasos(X: np.array, y: np.array, random_seed=None) -> WeightMatrix:
             nnz_sum = sum([x.nnz for x in W.m])
             sparsity = nnz_sum / (len(W.m) * W.m[0].shape[1])
             y_pred_heldout = predict(X_heldout, W_nz, nz_to_z)
+            y_pred_heldout_dot = predict_dot(X_heldout, amax.index)
             maf1 = f1_score(y_heldout, y_pred_heldout, average="macro")
             mif1 = f1_score(y_heldout, y_pred_heldout, average="micro")
-            stats = [i, learning_time, maf1, mif1, amax_multiplier, nnz_sum, sparsity]
+            maf1_dot = f1_score(y_heldout, y_pred_heldout_dot, average="macro")
+            mif1_dot = f1_score(y_heldout, y_pred_heldout_dot, average="micro")
+            stats = [i, learning_time, maf1, mif1, maf1_dot, mif1_dot, amax_multiplier, nnz_sum, sparsity]
             # print(stats)
             with open("log_%s.txt" % dataset_name, "a") as fout:
                 writer = csv.writer(fout)
