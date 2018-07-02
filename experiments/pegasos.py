@@ -1,12 +1,16 @@
 # Binary and multiclass SGD trainer for SVM a.k.a. Pegasos a.k.a. the baseline algorithm.
 
+import sys
+import csv
 import os, pickle
 import collections
-from typing import List
 
+import nmslib
 import numpy as np
 import scipy.sparse as ss
-from joblib import Parallel, delayed
+import time
+from sklearn.feature_extraction.text import TfidfTransformer
+from sklearn.metrics import f1_score
 from sklearn.preprocessing import normalize
 
 from lib.sparse_tools import dense_sparse_dot, dense_sparse_add, sparse_sparse_dot
@@ -14,16 +18,23 @@ from lib.argmax_tools import ANNArgmax, BruteforceArgmax
 from tqdm import tqdm
 
 # Read the dataset.
+use_class_sampling = True
 out_dir = "../data/parsed"
 
 # dataset_name = "WIKI_100K"
 dataset_name = "LSHTC1"
+if len(sys.argv) > 1:
+    dataset_name = sys.argv[1]
 # dataset_name = "20newsgroups"
 
 with open(os.path.join(out_dir, "%s_train.dump" % dataset_name), "rb") as fin:
     X_train = pickle.load(fin)
 with open(os.path.join(out_dir, "%s_train_out.dump" % dataset_name), "rb") as fin:
     y_train = pickle.load(fin)
+with open(os.path.join(out_dir, "%s_heldout.dump" % dataset_name), "rb") as fin:
+    X_heldout = pickle.load(fin)
+with open(os.path.join(out_dir, "%s_heldout_out.dump" % dataset_name), "rb") as fin:
+    y_heldout = pickle.load(fin)
 with open(os.path.join(out_dir, "%s_test.dump" % dataset_name), "rb") as fin:
     X_test = pickle.load(fin)
 with open(os.path.join(out_dir, "%s_test_out.dump" % dataset_name), "rb") as fin:
@@ -38,12 +49,40 @@ for dataset_part in ("train", "heldout", "test"):
 # X_train, X_test = normalize(X_train, norm="l1"), normalize(X_test, norm="l1")
 
 X_train = ss.hstack([X_train, np.ones(X_train.shape[0]).reshape(-1, 1)])
+X_heldout = ss.hstack([X_heldout, np.ones(X_heldout.shape[0]).reshape(-1, 1)])
 X_test = ss.hstack([X_test, np.ones(X_test.shape[0]).reshape(-1, 1)])
-X_train, X_test = ss.csr_matrix(X_train), ss.csr_matrix(X_test)
+X_train, X_heldout, X_test = ss.csr_matrix(X_train), ss.csr_matrix(X_heldout), ss.csr_matrix(X_test)
 
 classes_objects = collections.defaultdict(list)
+classes_cnt = [0] * n_classes
 for i, y in enumerate(y_train):
     classes_objects[y].append(i)
+    classes_cnt[y] += 1
+classes_cnt = np.array(classes_cnt)
+
+predict_chunk_size = 1000
+predict_num_threads = 4
+
+
+def chunks(l, n):
+    """Yield successive n-sized chunks from l."""
+    for i in range(0, l.shape[0], n):
+        yield l[i:i + n]
+
+
+def predict(X, W_nz, nz_to_z):
+    # TODO: incapsulation is broken - - fix
+    index = nmslib.init(method="sw-graph", space="cosinesimil_sparse",
+                        data_type=nmslib.DataType.SPARSE_VECTOR)
+    index.addDataPointBatch(W_nz)
+    index.createIndex({"indexThreadQty": predict_num_threads})
+    pred = []
+    for x_chunk in chunks(X, predict_chunk_size):
+        results = index.knnQueryBatch(x_chunk, k=1, num_threads=predict_num_threads)
+        for x, (nn_ids, _) in zip(x_chunk, results):
+            class_id = nz_to_z[nn_ids[0]]
+            pred.append(class_id)
+    return pred
 
 # Load Iris datasets
 # from sklearn.datasets import load_iris
@@ -110,7 +149,7 @@ class WeightMatrix:
         self.dtype = dtype
         self.a = 1.0
         self.snorm = 0.
-        self.m = [ss.csr_matrix((1, d), dtype=dtype) for _ in range(n)]
+        self.m = np.array([ss.csr_matrix((1, d), dtype=dtype) for _ in range(n)])
 
     def sparse_dot(self, ix: int, v: ss.csr_matrix):
         return sparse_sparse_dot(self.m[ix], v) * self.a
@@ -184,8 +223,8 @@ def multi_pegasos(X: np.array, y: np.array, random_seed=None) -> WeightMatrix:
     n, d = X.shape
 
     # TODO: make parameters
-    max_iter = 50000
-    lambd = 10
+    max_iter = 1000000
+    lambd = 10.
     k = 10
 
     W = WeightMatrix((n_classes, d))
@@ -196,13 +235,23 @@ def multi_pegasos(X: np.array, y: np.array, random_seed=None) -> WeightMatrix:
 
     if random_seed is not None:
         np.random.seed(random_seed)
-    random_ids = np.random.choice(n, size=max_iter * k)
+    if use_class_sampling:
+        class_uniform_p = 1. / (len(classes_cnt[classes_cnt != 0]) * classes_cnt[y_train])
+        random_ids = np.random.choice(n, size=max_iter * k, p=class_uniform_p)
+    else:
+        random_ids = np.random.choice(n, size=max_iter * k)
 
     # avg_scale = min(max_iter, num_to_avg)
     # avg_wv = WeightVector(d)
     amax_multiplier = 1.
 
+    learning_time = 0.
+
+    with open("log_%s.txt" % dataset_name, "w") as fout:
+        fout.write("i,learning_time,maf1,amax_multiplier,nnz_sum,sparsity\n")
+
     for i in tqdm(range(max_iter)):
+        iter_start = time.time()
         x_ids = random_ids[i * k: (i + 1) * k]
         xs = X[x_ids]
         eta = 1. / (lambd * (i + 2))
@@ -248,21 +297,42 @@ def multi_pegasos(X: np.array, y: np.array, random_seed=None) -> WeightMatrix:
             class_ixs = list(amax_update.keys())
             new_values = ss.vstack(list(amax_update.values()))
             amax.update(class_ixs, new_values)
-        if i % 1000 == 0:
-            print()
-            print("Argmax multiplier: %.9f" % (1. / amax_multiplier))
-            print("Iter #%6i, W sparsity: %.9f" % (i, sum([x.nnz for x in W.m]) / (len(W.m) * W.m[0].shape[1])))
-            print()
-            with open("W.dump", "wb") as fout:
+
+        iter_end = time.time()
+        learning_time += iter_end - iter_start
+
+        # if i % 100 == 0 and W.m[12].nnz > 0:
+        #     res = amax.index.knnQueryBatch(W.m[12] * W.a, k=1)
+        #     print(res)
+
+        if i % 1000 == 0 and i > 0:
+            # Save intermediate W matrix
+            with open("W_%s.dump" % dataset_name, "wb") as fout:
                 pickle.dump(W, fout)
+            # Create test index :(
+            # TODO: incapsulation is broken -- fix
+            ix_nz = [i for i, v in enumerate(W.m) if v.nnz != 0]
+            W_nz = ss.vstack(W.m[ix_nz])
+            nz_to_z = {k: v for k, v in enumerate(ix_nz)}
+            # Calculate MaF1 heldout score
+            nnz_sum = sum([x.nnz for x in W.m])
+            sparsity = nnz_sum / (len(W.m) * W.m[0].shape[1])
+            y_pred_heldout = predict(X_heldout, W_nz, nz_to_z)
+            maf1 = f1_score(y_heldout, y_pred_heldout, average="macro")
+            stats = [i, learning_time, maf1, amax_multiplier, nnz_sum, sparsity]
+            # print(stats)
+            with open("log_%s.txt" % dataset_name, "a") as fout:
+                writer = csv.writer(fout)
+                writer.writerow(stats)
 
     return W
 
 
 if __name__ == "__main__":
     # Train
+    print("processing %s ..." % dataset_name)
     W = multi_pegasos(X_train, y_train, random_seed=0)
-    with open("W.dump", "wb") as fout:
+    with open("W_%s.dump" % dataset_name, "wb") as fout:
         pickle.dump(W, fout)
     # clf = LogisticRegression(C=100.0, fit_intercept=False)
     # clf.fit(X_train, (y_train == pos_class))
