@@ -61,7 +61,7 @@ for i, y in enumerate(y_train):
 classes_cnt = np.array(classes_cnt)
 
 predict_chunk_size = 1000
-predict_num_threads = 4
+predict_num_threads = 2
 
 
 def chunks(l, n):
@@ -248,7 +248,7 @@ def multi_pegasos(X: np.array, y: np.array, random_seed=None) -> WeightMatrix:
     learning_time = 0.
 
     with open("log_%s.txt" % dataset_name, "w") as fout:
-        fout.write("i,learning_time,maf1,amax_multiplier,nnz_sum,sparsity\n")
+        fout.write("i,learning_time,maf1,mif1,amax_multiplier,nnz_sum,sparsity\n")
 
     for i in tqdm(range(max_iter)):
         iter_start = time.time()
@@ -314,12 +314,13 @@ def multi_pegasos(X: np.array, y: np.array, random_seed=None) -> WeightMatrix:
             ix_nz = [i for i, v in enumerate(W.m) if v.nnz != 0]
             W_nz = ss.vstack(W.m[ix_nz])
             nz_to_z = {k: v for k, v in enumerate(ix_nz)}
-            # Calculate MaF1 heldout score
+            # Calculate MaF1 and MiF1 heldout score
             nnz_sum = sum([x.nnz for x in W.m])
             sparsity = nnz_sum / (len(W.m) * W.m[0].shape[1])
             y_pred_heldout = predict(X_heldout, W_nz, nz_to_z)
             maf1 = f1_score(y_heldout, y_pred_heldout, average="macro")
-            stats = [i, learning_time, maf1, amax_multiplier, nnz_sum, sparsity]
+            mif1 = f1_score(y_heldout, y_pred_heldout, average="micro")
+            stats = [i, learning_time, maf1, mif1, amax_multiplier, nnz_sum, sparsity]
             # print(stats)
             with open("log_%s.txt" % dataset_name, "a") as fout:
                 writer = csv.writer(fout)

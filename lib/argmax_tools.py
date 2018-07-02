@@ -42,10 +42,10 @@ class BruteforceArgmax(BaseArgmax):
 class ANNArgmax(BaseArgmax):
     def __init__(self, method="sw-graph", is_sparse=True):
         if is_sparse:
-            self.index = nmslib.init(method=method, space="cosinesimil_sparse",
+            self.index = nmslib.init(method=method, space="negdotprod_sparse_fast",
                                      data_type=nmslib.DataType.SPARSE_VECTOR)
         else:
-            self.index = nmslib.init(method=method, space="cosinesimil",
+            self.index = nmslib.init(method=method, space="negdotprod",
                                      data_type=nmslib.DataType.DENSE_VECTOR)
         self.present = set()
         # TODO: replace inadequately high values to lower ones
