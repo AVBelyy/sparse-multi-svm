@@ -73,8 +73,7 @@ class ANNArgmax(BaseArgmax):
                                      data_type=nmslib.DataType.DENSE_VECTOR)
         self.present = set()
         self.not_present = set(range(n_classes))
-        self.index.createIndex({"indexThreadQty": 4, "efConstruction": 2000, "NN": 100})
-        self.index.setQueryTimeParams({"efSearch": 2000})
+        self.index.createIndex({"indexThreadQty": 4})
 
     def take_random_zero_vector(self):
         if len(self.not_present) > 0:

@@ -17,6 +17,8 @@ from lib.sparse_tools import dense_sparse_dot, dense_sparse_add, sparse_sparse_d
 from lib.argmax_tools import ANNArgmax, BruteforceArgmax, RandomArgmax
 from tqdm import tqdm
 
+from typing import Tuple
+
 # Read the dataset.
 use_class_sampling = True
 out_dir = "../data/parsed"
@@ -78,7 +80,7 @@ def chunks(l, n):
 
 
 def predict(X, W_nz, nz_to_z):
-    # TODO: incapsulation is broken - - fix
+    # TODO: incapsulation is broken -- fix
     index = nmslib.init(method="sw-graph", space="cosinesimil_sparse",
                         data_type=nmslib.DataType.SPARSE_VECTOR)
     index.addDataPointBatch(W_nz)
@@ -252,13 +254,13 @@ def stochastic_pegasos(X: np.array, y: np.array, pos_class: int, random_seed=Non
     return avg_wv.a * avg_wv.v
 
 
-def multi_pegasos(X: np.array, y: np.array, lasso_svm=True, random_seed=None) -> WeightMatrix:
+def multi_pegasos(X: np.array, y: np.array, lasso_svm=True, random_seed=None) -> Tuple[WeightMatrix, Tuple]:
     n, d = X.shape
 
     # TODO: make parameters
-    max_iter = 3000
+    max_iter = 2000
     eta0 = 0.1
-    eta_decay_rate = 0.01
+    eta_decay_rate = 0.02
 
     if lasso_svm:
         k = int(np.sqrt(n_classes))
@@ -287,6 +289,9 @@ def multi_pegasos(X: np.array, y: np.array, lasso_svm=True, random_seed=None) ->
 
     learning_time = 0.
 
+    rs_stats = collections.Counter()
+    ys_stats = collections.Counter()
+
     with open("log_%s.txt" % dataset_name, "w") as fout:
         fout.write("i,learning_time,maf1,mif1,maf1_dot,mif1_dot,amax_multiplier,nnz_sum,sparsity\n")
 
@@ -314,12 +319,16 @@ def multi_pegasos(X: np.array, y: np.array, lasso_svm=True, random_seed=None) ->
         rs = rs2
         grad_ixs, grad_weights = [], []
 
+        # Collect class stats
+        rs_stats.update(rs)
+        ys_stats.update(ys)
+
         for j_, y_, r_, x_ in zip(x_ids, ys, rs, xs):
             # loss = max(0, 1 + (-dr) - Wyx.elem_get(j_))
             # TODO: use wrx from dists
             wrx = W.sparse_dot(r_, x_)
             wyx = W.sparse_dot(y_, x_)
-            loss = 1 + wrx - wyx
+            loss = 0.000001 + wrx - wyx
             if loss > 0:
                 grad_ixs.append((y_, j_))
                 grad_weights.append(+eta / k)
@@ -346,17 +355,22 @@ def multi_pegasos(X: np.array, y: np.array, lasso_svm=True, random_seed=None) ->
         if lasso_svm:
             # TODO: change gamma parameter dynamically
             W_ixs = list(set(ys) | set(rs))
-            th = 0.00001 * n_classes / len(W_ixs) * lambd * eta
+            th = 0.000005 * n_classes / len(W_ixs) * lambd * eta
             for class_ix in W_ixs:
                 upd = W.soft_threshold(class_ix, th)
                 amax_update[class_ix] = upd
 
         # Normalize weight matrix and Wyx cache matrix
         if not lasso_svm:
+            # Projection step
             iter_norm = min(1., 1. / np.sqrt(lambd * W.snorm))
             W.scale(iter_norm)
             amax_multiplier *= iter_norm
             # Wyx.scale(iter_norm)
+            # for class_ix, new_val in amax_update.items():
+            #     snorm = np.dot(new_val.data, new_val.data)
+            #     new_norm = min(1., 1. / np.sqrt(lambd * snorm))
+            #     amax_update[class_ix] *= new_norm
         if len(amax_update) > 0:
             class_ixs = np.array(list(amax_update.keys()))
             new_values = ss.vstack(list(amax_update.values()))
@@ -367,7 +381,7 @@ def multi_pegasos(X: np.array, y: np.array, lasso_svm=True, random_seed=None) ->
         iter_end = time.time()
         learning_time += iter_end - iter_start
 
-        if i % 100 == 0 and i > 0:
+        if i % 10000 == 0 and i > 0:
             # Save intermediate W matrix
             with open("W_%s.dump" % dataset_name, "wb") as fout:
                 pickle.dump(W, fout)
@@ -391,15 +405,15 @@ def multi_pegasos(X: np.array, y: np.array, lasso_svm=True, random_seed=None) ->
                 writer = csv.writer(fout)
                 writer.writerow(stats)
 
-    return W
+    return W, (ys_stats, rs_stats)
 
 
 if __name__ == "__main__":
     # Train
     print("processing %s ... (lasso = %d)" % (dataset_name, is_lasso))
-    W = multi_pegasos(X_train, y_train, lasso_svm=is_lasso, random_seed=0)
+    W, stats = multi_pegasos(X_train, y_train, lasso_svm=is_lasso, random_seed=0)
     with open("W_%s.dump" % dataset_name, "wb") as fout:
-        pickle.dump(W, fout)
+        pickle.dump((W, stats), fout)
     # clf = LogisticRegression(C=100.0, fit_intercept=False)
     # clf.fit(X_train, (y_train == pos_class))
     # wv_lr = clf.coef_.reshape(-1, 1)
