@@ -11,6 +11,7 @@ import scipy.sparse as ss
 import time
 from sklearn.feature_extraction.text import TfidfTransformer
 from sklearn.metrics import f1_score
+from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.preprocessing import normalize
 
 from lib.sparse_tools import dense_sparse_dot, dense_sparse_add, sparse_sparse_dot
@@ -70,7 +71,6 @@ for i, y in enumerate(y_train):
 classes_cnt = np.array(classes_cnt)
 
 predict_chunk_size = 1000
-predict_num_threads = 2
 
 
 def chunks(l, n):
@@ -79,29 +79,15 @@ def chunks(l, n):
         yield l[i:i + n]
 
 
-def predict(X, W_nz, nz_to_z):
-    # TODO: incapsulation is broken -- fix
-    index = nmslib.init(method="sw-graph", space="cosinesimil_sparse",
-                        data_type=nmslib.DataType.SPARSE_VECTOR)
-    index.addDataPointBatch(W_nz)
-    index.createIndex({"indexThreadQty": predict_num_threads})
-    pred = []
+def predict_NN(X, Ws, WsT, metric="cosine"):
+    y_pred = []
     for x_chunk in chunks(X, predict_chunk_size):
-        results = index.knnQueryBatch(x_chunk, k=1, num_threads=predict_num_threads)
-        for x, (nn_ids, _) in zip(x_chunk, results):
-            class_id = nz_to_z[nn_ids[0]]
-            pred.append(class_id)
-    return pred
-
-
-def predict_dot(X, index):
-    pred = []
-    for x_chunk in chunks(X, predict_chunk_size):
-        results = index.knnQueryBatch(x_chunk, k=1, num_threads=predict_num_threads)
-        for x, (nn_ids, _) in zip(x_chunk, results):
-            class_id = nn_ids[0]
-            pred.append(class_id)
-    return pred
+        if metric == "cosine":
+            results = cosine_similarity(x_chunk, Ws).argmax(axis=1)
+        else:
+            results = np.array(x_chunk.dot(WsT).argmax(axis=1).T)[0]
+        y_pred += list(results)
+    return y_pred
 
 
 # Load Iris datasets
@@ -326,10 +312,10 @@ def multi_pegasos(X: np.array, y: np.array, lasso_svm=True, random_seed=None) ->
         for j_, y_, r_, x_ in zip(x_ids, ys, rs, xs):
             # loss = max(0, 1 + (-dr) - Wyx.elem_get(j_))
             # TODO: use wrx from dists
-            wrx = W.sparse_dot(r_, x_)
-            wyx = W.sparse_dot(y_, x_)
-            loss = 0.000001 + wrx - wyx
-            if loss > 0:
+            # wrx = W.sparse_dot(r_, x_)
+            # wyx = W.sparse_dot(y_, x_)
+            # loss = 1 + wrx - wyx
+            if True: # or loss > 0:
                 grad_ixs.append((y_, j_))
                 grad_weights.append(+eta / k)
                 grad_ixs.append((r_, j_))
@@ -381,26 +367,24 @@ def multi_pegasos(X: np.array, y: np.array, lasso_svm=True, random_seed=None) ->
         iter_end = time.time()
         learning_time += iter_end - iter_start
 
-        if i % 10000 == 0 and i > 0:
+        if i % 500 == 0 and i > 0:
             # Save intermediate W matrix
             with open("W_%s.dump" % dataset_name, "wb") as fout:
                 pickle.dump(W, fout)
             # Create test index :(
             # TODO: incapsulation is broken -- fix
-            ix_nz = [i for i, v in enumerate(W.m) if v.nnz != 0]
-            W_nz = ss.vstack(W.m[ix_nz])
-            nz_to_z = {k: v for k, v in enumerate(ix_nz)}
             # Calculate MaF1 and MiF1 heldout score
             nnz_sum = sum([x.nnz for x in W.m])
             sparsity = nnz_sum / (len(W.m) * W.m[0].shape[1])
-            y_pred_heldout = predict(X_heldout, W_nz, nz_to_z)
-            y_pred_heldout_dot = predict_dot(X_heldout, amax2.index)
+            Ws = ss.vstack(W.m) * W.a
+            WsT = ss.csr_matrix(Ws.T)
+            y_pred_heldout = predict_NN(X_heldout, Ws, WsT, metric="cosine")
+            y_pred_heldout_dot = predict_NN(X_heldout, Ws, WsT, metric="dot")
             maf1 = f1_score(y_heldout, y_pred_heldout, average="macro")
             mif1 = f1_score(y_heldout, y_pred_heldout, average="micro")
             maf1_dot = f1_score(y_heldout, y_pred_heldout_dot, average="macro")
             mif1_dot = f1_score(y_heldout, y_pred_heldout_dot, average="micro")
             stats = [i, learning_time, maf1, mif1, maf1_dot, mif1_dot, amax_multiplier, nnz_sum, sparsity]
-            # print(stats)
             with open("log_%s.txt" % dataset_name, "a") as fout:
                 writer = csv.writer(fout)
                 writer.writerow(stats)
