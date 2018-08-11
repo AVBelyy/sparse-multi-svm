@@ -99,8 +99,8 @@ class WeightMatrix:
 
 wm_filename = sys.argv[2] if len(sys.argv) > 2 else "W_%s.dump" % dataset_name
 with open(wm_filename, "rb") as fin:
-    #  W, _ = pickle.load(fin)
-    W = pickle.load(fin)
+    W, _ = pickle.load(fin)
+    # W = pickle.load(fin)
 
 # normalize all vectors
 W.a /= W.a * np.sqrt(max([np.dot(x.data, x.data) for x in W.m]))
