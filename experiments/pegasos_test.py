@@ -1,5 +1,6 @@
 import os
 import sys
+import ctypes
 import pickle
 import nmslib
 import itertools
@@ -22,6 +23,7 @@ from sklearn.metrics.pairwise import linear_kernel
 from sklearn.utils.extmath import safe_sparse_dot
 from tqdm import tqdm
 from time import time
+from multiprocessing import Pool, RawArray
 
 datasets_names = ("LSHTC1", "DMOZ", "WIKI_Small", "WIKI_50K", "WIKI_100K")
 dataset_dir = "../data"
@@ -99,9 +101,10 @@ class WeightMatrix:
             self.a *= s
             self.snorm *= (s*s)
 
-wm_filename = sys.argv[2] if len(sys.argv) > 1 else "W_%s.dump" % dataset_name
+wm_filename = sys.argv[2] if len(sys.argv) > 2 else "W_%s.dump" % dataset_name
 with open(wm_filename, "rb") as fin:
-    W, (ys_stats, rs_stats) = pickle.load(fin)
+    #  W, _ = pickle.load(fin)
+    W = pickle.load(fin)
 
 # normalize all vectors
 W.a /= W.a * np.sqrt(max([np.dot(x.data, x.data) for x in W.m]))
@@ -116,7 +119,8 @@ def chunks(l, n):
         yield l[i:i + n]
 
 chunk_size = 1000
-WsT = ss.csr_matrix(Ws.T)
+# WsT = ss.csr_matrix(Ws.T)
+num_threads = 12
 
 def predict_ANN(X):
     y_pred = []
@@ -128,18 +132,55 @@ def predict_ANN(X):
             y_pred.append(class_id)
     return y_pred
 
+def share_np_array(arr):
+    if arr.dtype == np.float64:
+        ctype = ctypes.c_double
+    elif arr.dtype == np.int32:
+        ctype = ctypes.c_int
+    else:
+        raise NotImplementedError
+    sharr = RawArray(ctype, len(arr))
+    sharr_np = np.frombuffer(sharr, dtype=arr.dtype).reshape(arr.shape)
+    np.copyto(sharr_np, arr)
+    return sharr
+
+def share_sparse_array(sparr):
+    shsparr = {}
+    shsparr["shape"] = sparr.shape
+    for k, v in {"data": sparr.data, "indices": sparr.indices, "indptr": sparr.indptr}.items():
+        shsparr[k] = (share_np_array(v), v.dtype, len(v))
+    return tuple(shsparr.items())
+
+def load_sparse_matrix(shsparr):
+    shsparr = dict(shsparr)
+    sparr = {}
+    sparr["shape"] = shsparr["shape"]
+    del shsparr["shape"]
+    for k, (sharr, dtype, count) in shsparr.items():
+        sparr[k] = np.frombuffer(sharr, dtype=dtype, count=count)
+    spmat = ss.csr_matrix((sparr["data"], sparr["indices"], sparr["indptr"]), shape=sparr["shape"], copy=False)
+    return spmat
+
+Ws_shared = share_sparse_array(Ws)
+Ws_worker = None
+
+def init_worker(args):
+    global Ws_worker
+    Ws_worker = load_sparse_matrix(args)
+
+def worker_func(x):
+    return cosine_similarity(x, Ws_worker).argmax(axis=1)
+
 def predict_NN(X, metric="cosine"):
-    y_pred = []
-    for x_chunk in tqdm(chunks(X, chunk_size)):
-        if metric == "cosine":
-            results = cosine_similarity(x_chunk, Ws).argmax(axis=1)
-        else:
-            results = np.array(x_chunk.dot(WsT).argmax(axis=1).T)[0]
-        y_pred += list(results)
+    if metric != "cosine":
+        raise NotImplementedError
+    with Pool(processes=num_threads, initializer=lambda *x: init_worker(x), initargs=Ws_shared) as pool:
+        result = pool.map(worker_func, chunks(X, chunk_size))
+        y_pred = list(itertools.chain.from_iterable(result))
     return y_pred
 
 t1 = time()
-y_pred_test_cos = predict_NN(X_test, metric="cosine")
+y_pred_test = predict_NN(X_test, metric="cosine")
 t2 = time()
 print("Predicting done")
 print()
