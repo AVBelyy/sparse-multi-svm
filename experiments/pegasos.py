@@ -33,6 +33,11 @@ if len(sys.argv) > 1:
 if len(sys.argv) > 2:
     is_lasso = (sys.argv[2] == "lasso")
 
+if is_lasso:
+    dataset_filename = "%s_lasso" % dataset_name
+else:
+    dataset_filename = dataset_name
+
 with open(os.path.join(out_dir, "%s_train.dump" % dataset_name), "rb") as fin:
     X_train = pickle.load(fin)
 with open(os.path.join(out_dir, "%s_train_out.dump" % dataset_name), "rb") as fin:
@@ -244,7 +249,7 @@ def multi_pegasos(X: np.array, y: np.array, lasso_svm=True, random_seed=None) ->
     n, d = X.shape
 
     # TODO: make parameters
-    max_iter = 20000
+    max_iter = 16001
     eta0 = 0.1
     eta_decay_rate = 0.02
 
@@ -278,7 +283,7 @@ def multi_pegasos(X: np.array, y: np.array, lasso_svm=True, random_seed=None) ->
     rs_stats = collections.Counter()
     ys_stats = collections.Counter()
 
-    with open("log_%s.txt" % dataset_name, "w") as fout:
+    with open("log_%s.txt" % dataset_filename, "w") as fout:
         fout.write("i,learning_time,maf1,mif1,maf1_dot,mif1_dot,amax_multiplier,nnz_sum,sparsity\n")
 
     # a, b = 0., 0.
@@ -312,10 +317,10 @@ def multi_pegasos(X: np.array, y: np.array, lasso_svm=True, random_seed=None) ->
         for j_, y_, r_, x_ in zip(x_ids, ys, rs, xs):
             # loss = max(0, 1 + (-dr) - Wyx.elem_get(j_))
             # TODO: use wrx from dists
-            wrx = W.sparse_dot(r_, x_)
-            wyx = W.sparse_dot(y_, x_)
-            loss = 1 + wrx - wyx
-            if loss > 0:
+            # wrx = W.sparse_dot(r_, x_)
+            # wyx = W.sparse_dot(y_, x_)
+            # loss = 1 + wrx - wyx
+            if True: #loss > 0:
                 grad_ixs.append((y_, j_))
                 grad_weights.append(+eta / k)
                 grad_ixs.append((r_, j_))
@@ -369,7 +374,7 @@ def multi_pegasos(X: np.array, y: np.array, lasso_svm=True, random_seed=None) ->
 
         if i % 500 == 0 and i > 0:
             # Save intermediate W matrix
-            with open("W_%s.dump" % dataset_name, "wb") as fout:
+            with open("W_%s.dump" % dataset_filename, "wb") as fout:
                 pickle.dump(W, fout)
             # Create test index :(
             # TODO: incapsulation is broken -- fix
@@ -385,7 +390,7 @@ def multi_pegasos(X: np.array, y: np.array, lasso_svm=True, random_seed=None) ->
             maf1_dot = f1_score(y_heldout, y_pred_heldout_dot, average="macro")
             mif1_dot = f1_score(y_heldout, y_pred_heldout_dot, average="micro")
             stats = [i, learning_time, maf1, mif1, maf1_dot, mif1_dot, amax_multiplier, nnz_sum, sparsity]
-            with open("log_%s.txt" % dataset_name, "a") as fout:
+            with open("log_%s.txt" % dataset_filename, "a") as fout:
                 writer = csv.writer(fout)
                 writer.writerow(stats)
 
@@ -396,7 +401,7 @@ if __name__ == "__main__":
     # Train
     print("processing %s ... (lasso = %d)" % (dataset_name, is_lasso))
     W, stats = multi_pegasos(X_train, y_train, lasso_svm=is_lasso, random_seed=0)
-    with open("W_%s.dump" % dataset_name, "wb") as fout:
+    with open("W_%s.dump" % dataset_filename, "wb") as fout:
         pickle.dump((W, stats), fout)
     # clf = LogisticRegression(C=100.0, fit_intercept=False)
     # clf.fit(X_train, (y_train == pos_class))

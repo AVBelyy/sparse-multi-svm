@@ -73,13 +73,13 @@ class ANNArgmax(BaseArgmax):
                                      data_type=nmslib.DataType.DENSE_VECTOR)
         self.present = set()
         self.not_present = set(range(n_classes))
-        self.index.createIndex({"indexThreadQty": 4})
+        self.index.createIndex({"indexThreadQty": 12})
 
     def take_random_zero_vector(self):
         if len(self.not_present) > 0:
             return random.sample(self.not_present, 1)[0]
 
-    def query(self, xs, ys, num_threads=4):
+    def query(self, xs, ys, num_threads=12):
         results = self.index.knnQueryBatch(xs, k=2, num_threads=num_threads)
         indices = []
         # dists = []
