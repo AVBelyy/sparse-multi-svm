@@ -33,6 +33,8 @@ if len(sys.argv) > 1:
 if len(sys.argv) > 2:
     is_lasso = (sys.argv[2] == "lasso")
 
+num_threads = 32
+
 if is_lasso:
     dataset_filename = "%s_lasso" % dataset_name
 else:
@@ -249,7 +251,7 @@ def multi_pegasos(X: np.array, y: np.array, lasso_svm=True, random_seed=None) ->
     n, d = X.shape
 
     # TODO: make parameters
-    max_iter = 16001
+    max_iter = 2001
     eta0 = 0.1
     eta_decay_rate = 0.02
 
@@ -264,7 +266,7 @@ def multi_pegasos(X: np.array, y: np.array, lasso_svm=True, random_seed=None) ->
     # Wyx = WeightVector(n)
 
     # amax1 = BruteforceArgmax(W)
-    amax2 = ANNArgmax(n_classes)
+    amax2 = ANNArgmax(n_classes, num_threads)
 
     if random_seed is not None:
         np.random.seed(random_seed)

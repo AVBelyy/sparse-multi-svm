@@ -116,7 +116,7 @@ def chunks(l, n):
 
 chunk_size = 1000
 # WsT = ss.csr_matrix(Ws.T)
-num_threads = 12
+num_threads = 32
 
 def predict_ANN(X):
     y_pred = []

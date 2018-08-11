@@ -64,23 +64,24 @@ class RandomArgmax(BaseArgmax):
 
 
 class ANNArgmax(BaseArgmax):
-    def __init__(self, n_classes, method="sw-graph", is_sparse=True):
+    def __init__(self, n_classes, num_threads, method="sw-graph", is_sparse=True):
         if is_sparse:
             self.index = nmslib.init(method=method, space="negdotprod_sparse_fast",
                                      data_type=nmslib.DataType.SPARSE_VECTOR)
         else:
             self.index = nmslib.init(method=method, space="negdotprod",
                                      data_type=nmslib.DataType.DENSE_VECTOR)
+        self.num_threads = num_threads
         self.present = set()
         self.not_present = set(range(n_classes))
-        self.index.createIndex({"indexThreadQty": 12})
+        self.index.createIndex({"indexThreadQty": self.num_threads})
 
     def take_random_zero_vector(self):
         if len(self.not_present) > 0:
             return random.sample(self.not_present, 1)[0]
 
-    def query(self, xs, ys, num_threads=12):
-        results = self.index.knnQueryBatch(xs, k=2, num_threads=num_threads)
+    def query(self, xs, ys):
+        results = self.index.knnQueryBatch(xs, k=2, num_threads=self.num_threads)
         indices = []
         # dists = []
         for (ixs, ds), y_ in zip(results, ys):
