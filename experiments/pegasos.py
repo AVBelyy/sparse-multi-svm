@@ -244,7 +244,7 @@ def multi_pegasos(X: np.array, y: np.array, lasso_svm=True, random_seed=None) ->
     n, d = X.shape
 
     # TODO: make parameters
-    max_iter = 2000
+    max_iter = 20000
     eta0 = 0.1
     eta_decay_rate = 0.02
 
@@ -312,10 +312,10 @@ def multi_pegasos(X: np.array, y: np.array, lasso_svm=True, random_seed=None) ->
         for j_, y_, r_, x_ in zip(x_ids, ys, rs, xs):
             # loss = max(0, 1 + (-dr) - Wyx.elem_get(j_))
             # TODO: use wrx from dists
-            # wrx = W.sparse_dot(r_, x_)
-            # wyx = W.sparse_dot(y_, x_)
-            # loss = 1 + wrx - wyx
-            if True: # or loss > 0:
+            wrx = W.sparse_dot(r_, x_)
+            wyx = W.sparse_dot(y_, x_)
+            loss = 1 + wrx - wyx
+            if loss > 0:
                 grad_ixs.append((y_, j_))
                 grad_weights.append(+eta / k)
                 grad_ixs.append((r_, j_))
