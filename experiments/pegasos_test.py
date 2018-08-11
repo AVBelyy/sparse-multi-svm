@@ -6,11 +6,7 @@ import nmslib
 import itertools
 import collections
 import numpy as np
-import pandas as pd
 import scipy.sparse as ss
-import matplotlib.pyplot as plt
-import matplotlib
-from typing import List
 from sklearn.feature_extraction.text import TfidfTransformer
 from lib.sparse_tools import dense_sparse_dot, dense_sparse_add, sparse_sparse_dot
 from lib.argmax_tools import BruteforceArgmax, ANNArgmax
