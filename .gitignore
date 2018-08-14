@@ -12,3 +12,5 @@ experiments/pegasos
 *.eps
 *.mdl
 *.dump
+*.txt
+*.out
