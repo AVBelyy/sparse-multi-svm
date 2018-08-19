@@ -274,7 +274,7 @@ def stochastic_pegasos(X: np.array, y: np.array, pos_class: int, random_seed=Non
     return avg_wv.a * avg_wv.v
 
 
-def multi_pegasos(X: np.array, y: np.array, lasso_svm=True, random_seed=None) -> Tuple[WeightMatrix, Tuple]:
+def multi_pegasos(X: np.array, y: np.array, lasso_svm=True, lsh_ann = False, random_seed=None) -> Tuple[WeightMatrix, Tuple]:
     n, d = X.shape
 
     # TODO: make parameters
@@ -293,7 +293,10 @@ def multi_pegasos(X: np.array, y: np.array, lasso_svm=True, random_seed=None) ->
     # Wyx = WeightVector(n)
 
     # amax1 = BruteforceArgmax(W)
-    amax2 = ANNArgmax(n_classes, num_threads)
+    if lsh_ann:
+        amax2 = ANNArgmax(n_classes, num_threads, LSH=True, n_features=d, hash_length=2048)
+    else:
+        amax2 = ANNArgmax(n_classes, num_threads)
 
     if random_seed is not None:
         np.random.seed(random_seed)
