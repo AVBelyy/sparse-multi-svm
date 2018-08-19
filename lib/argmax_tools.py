@@ -7,6 +7,7 @@ from abc import ABCMeta
 from abc import abstractmethod
 
 from lib.sparse_tools import sparse_sparse_dot
+from lib.lsh_tools import SimpleLSH
 
 
 class BaseArgmax:
@@ -64,8 +65,14 @@ class RandomArgmax(BaseArgmax):
 
 
 class ANNArgmax(BaseArgmax):
-    def __init__(self, n_classes, method="sw-graph", is_sparse=True):
-        if is_sparse:
+    def __init__(self, n_classes, method="sw-graph", is_sparse=True, LSH=True, n_features = None, hash_length = 256):
+        if LSH:
+            if n_features is None:
+                raise AttributeError("n_features is not defined")
+            self.lsh = SimpleLSH(n_features=n_features, hash_length=hash_length)
+            self.index = nmslib.init(method=method, space="bit_hamming",
+                                     data_type=nmslib.DataType.DENSE_VECTOR)
+        elif is_sparse:
             self.index = nmslib.init(method=method, space="negdotprod_sparse_fast",
                                      data_type=nmslib.DataType.SPARSE_VECTOR)
         else:
@@ -80,6 +87,9 @@ class ANNArgmax(BaseArgmax):
             return random.sample(self.not_present, 1)[0]
 
     def query(self, xs, ys, num_threads=4):
+        if hasattr(self, "lsh"):
+            xs = self.lsh.transform(xs)
+
         results = self.index.knnQueryBatch(xs, k=2, num_threads=num_threads)
         indices = []
         # dists = []
@@ -104,6 +114,8 @@ class ANNArgmax(BaseArgmax):
 
     def update(self, ixs: np.ndarray, new_values: ss.csr_matrix):
         # print("to del: ", ixs_del)
+        if hasattr(self, "lsh"):
+            new_values = self.lsh.transform(new_values)
         ixs_set = set(ixs)
         ixs_del = list(self.present & ixs_set)
         del_strategy = 0
