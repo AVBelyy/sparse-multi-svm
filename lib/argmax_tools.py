@@ -65,7 +65,7 @@ class RandomArgmax(BaseArgmax):
 
 
 class ANNArgmax(BaseArgmax):
-    def __init__(self, n_classes,  num_threads=4,  method="sw-graph", is_sparse=True,
+    def __init__(self, n_classes,  num_threads,  method="sw-graph", is_sparse=True,
                  LSH=False, n_features = None, hash_length = 256):
         if LSH:
             if n_features is None:
