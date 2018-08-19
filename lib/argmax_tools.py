@@ -65,7 +65,8 @@ class RandomArgmax(BaseArgmax):
 
 
 class ANNArgmax(BaseArgmax):
-    def __init__(self, n_classes, method="sw-graph", is_sparse=True, LSH=True, n_features = None, hash_length = 256):
+    def __init__(self, n_classes,  num_threads=4,  method="sw-graph", is_sparse=True,
+                 LSH=False, n_features = None, hash_length = 256):
         if LSH:
             if n_features is None:
                 raise AttributeError("n_features is not defined")
@@ -117,7 +118,7 @@ class ANNArgmax(BaseArgmax):
         # print("to del: ", ixs_del)
         if hasattr(self, "lsh"):
             new_values = self.lsh.transform(new_values)
-            
+
         ixs_set = set(ixs)
         ixs_del = list(self.present & ixs_set)
         del_strategy = 0
