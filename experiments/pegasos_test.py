@@ -66,6 +66,17 @@ for i, y in enumerate(y_train):
     classes_cnt[y] += 1
 classes_cnt = np.array(classes_cnt)
 
+"""
+from sklearn.decomposition import TruncatedSVD
+svd = TruncatedSVD(n_components=2000, algorithm="arpack", random_state=0)
+X_train = X_train.astype(np.float32)
+svd.fit(X_train)
+
+X_train = ss.csr_matrix(svd.transform(X_train))
+X_heldout = ss.csr_matrix(svd.transform(X_heldout))
+X_test = ss.csr_matrix(svd.transform(X_test))
+"""
+
 X_train = ss.hstack([X_train, np.ones(X_train.shape[0]).reshape(-1, 1)])
 X_heldout = ss.hstack([X_heldout, np.ones(X_heldout.shape[0]).reshape(-1, 1)])
 X_test = ss.hstack([X_test, np.ones(X_test.shape[0]).reshape(-1, 1)])
@@ -116,7 +127,7 @@ def chunks(l, n):
 
 chunk_size = 1000
 # WsT = ss.csr_matrix(Ws.T)
-num_threads = 32
+num_threads = 16
 
 def predict_ANN(X):
     y_pred = []
