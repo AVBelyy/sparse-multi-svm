@@ -78,9 +78,10 @@ class ANNArgmax(BaseArgmax):
         else:
             self.index = nmslib.init(method=method, space="negdotprod",
                                      data_type=nmslib.DataType.DENSE_VECTOR)
+        self.num_threads = num_threads
         self.present = set()
         self.not_present = set(range(n_classes))
-        self.index.createIndex({"indexThreadQty": 4})
+        self.index.createIndex({"indexThreadQty": self.num_threads})
 
     def take_random_zero_vector(self):
         if len(self.not_present) > 0:
@@ -116,6 +117,7 @@ class ANNArgmax(BaseArgmax):
         # print("to del: ", ixs_del)
         if hasattr(self, "lsh"):
             new_values = self.lsh.transform(new_values)
+            
         ixs_set = set(ixs)
         ixs_del = list(self.present & ixs_set)
         del_strategy = 0

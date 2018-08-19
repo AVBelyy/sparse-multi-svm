@@ -12,3 +12,7 @@ experiments/pegasos
 *.eps
 *.mdl
 *.dump
+*.txt
+*.out
+*.tar
+*.tar.gz

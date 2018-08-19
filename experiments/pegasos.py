@@ -2,6 +2,7 @@
 
 import sys
 import csv
+import resource
 import os, pickle
 import collections
 
@@ -21,17 +22,29 @@ from tqdm import tqdm
 from typing import Tuple
 
 # Read the dataset.
-use_class_sampling = True
 out_dir = "../data/parsed"
 
 # dataset_name = "WIKI_100K"
 dataset_name = "LSHTC1"
 is_lasso = False
+gamma = 0.000005
 # dataset_name = "20newsgroups"
 if len(sys.argv) > 1:
     dataset_name = sys.argv[1]
 if len(sys.argv) > 2:
     is_lasso = (sys.argv[2] == "lasso")
+if len(sys.argv) > 3:
+    gamma = float(sys.argv[3])
+
+num_threads = 16
+
+if is_lasso:
+    dataset_filename = "%s_lasso" % dataset_name
+else:
+    dataset_filename = dataset_name
+
+use_class_sampling = True
+use_dummy_loss = not is_lasso
 
 with open(os.path.join(out_dir, "%s_train.dump" % dataset_name), "rb") as fin:
     X_train = pickle.load(fin)
@@ -57,6 +70,21 @@ tfidf.fit(X_train)
 X_train = tfidf.transform(X_train, copy=False)
 X_heldout = tfidf.transform(X_heldout, copy=False)
 X_test = tfidf.transform(X_test, copy=False)
+
+"""
+t11 = time.time()
+from sklearn.decomposition import TruncatedSVD
+svd = TruncatedSVD(n_components=2000, algorithm="arpack", random_state=0)
+X_train = X_train.astype(np.float32)
+svd.fit(X_train)
+
+X_train = ss.csr_matrix(svd.transform(X_train))
+X_heldout = ss.csr_matrix(svd.transform(X_heldout))
+X_test = ss.csr_matrix(svd.transform(X_test))
+t12 = time.time()
+"""
+
+print("I have PID", os.getpid())
 
 X_train = ss.hstack([X_train, np.ones(X_train.shape[0]).reshape(-1, 1)])
 X_heldout = ss.hstack([X_heldout, np.ones(X_heldout.shape[0]).reshape(-1, 1)])
@@ -155,21 +183,24 @@ class WeightMatrix:
         self.dtype = dtype
         self.a = 1.0
         self.snorm = 0.
-        # self.m = np.array([ss.csr_matrix((1, d), dtype=dtype) for _ in range(n)])
-        # TODO: random_state projeban
-        self.m = np.array([(ss.random(1, d, format="csr", density=0.001, dtype=dtype) * 1. / d) for _ in range(n)])
+        self.m = np.array([ss.csr_matrix((1, d), dtype=dtype) for _ in range(n)])
+        self.nnz = 0
 
     def sparse_dot(self, ix: int, v: ss.csr_matrix):
         return sparse_sparse_dot(self.m[ix], v) * self.a
 
     def sparse_add(self, ix: int, v: ss.csr_matrix, s: float):
         old_ix_norm = np.dot(self.m[ix].data, self.m[ix].data)
+        old_nnz = self.m[ix].nnz
         self.m[ix] += v * (s / self.a)
         new_ix_norm = np.dot(self.m[ix].data, self.m[ix].data)
+        new_nnz = self.m[ix].nnz
         self.snorm += (new_ix_norm - old_ix_norm) * (self.a * self.a)
+        self.nnz += new_nnz - old_nnz
         return self.m[ix] * self.a
 
     def soft_threshold(self, ix: int, th: float):
+        # Can skip updating snorm as the usage of soft_threshold and snorm is mutually exclusive
         th /= self.a
         arr = self.m[ix].toarray()
         gt_ix = (arr > +th)
@@ -178,8 +209,11 @@ class WeightMatrix:
         arr[gt_ix] -= th
         arr[lt_ix] += th
         arr[eq_ix] = 0
+        old_nnz = self.m[ix].nnz
         arr_sparse = ss.csr_matrix(arr, dtype=self.m[ix].dtype)
+        new_nnz = arr_sparse.nnz
         self.m[ix] = arr_sparse
+        self.nnz += new_nnz - old_nnz
         return arr_sparse * self.a
 
     def scale(self, s: float):
@@ -244,22 +278,22 @@ def multi_pegasos(X: np.array, y: np.array, lasso_svm=True, random_seed=None) ->
     n, d = X.shape
 
     # TODO: make parameters
-    max_iter = 20000
+    max_iter = 41
     eta0 = 0.1
     eta_decay_rate = 0.02
 
     if lasso_svm:
-        k = int(np.sqrt(n_classes))
+        k = 100 * int(np.sqrt(n_classes))
         lambd = 1.
     else:
-        k = int(np.sqrt(n_classes))
+        k = 100 * int(np.sqrt(n_classes))
         lambd = 1.
 
     W = WeightMatrix((n_classes, d))
     # Wyx = WeightVector(n)
 
     # amax1 = BruteforceArgmax(W)
-    amax2 = ANNArgmax(n_classes)
+    amax2 = ANNArgmax(n_classes, num_threads)
 
     if random_seed is not None:
         np.random.seed(random_seed)
@@ -278,7 +312,7 @@ def multi_pegasos(X: np.array, y: np.array, lasso_svm=True, random_seed=None) ->
     rs_stats = collections.Counter()
     ys_stats = collections.Counter()
 
-    with open("log_%s.txt" % dataset_name, "w") as fout:
+    with open("log_%s_%d.txt" % (dataset_filename, os.getpid()), "w") as fout:
         fout.write("i,learning_time,maf1,mif1,maf1_dot,mif1_dot,amax_multiplier,nnz_sum,sparsity\n")
 
     # a, b = 0., 0.
@@ -306,15 +340,18 @@ def multi_pegasos(X: np.array, y: np.array, lasso_svm=True, random_seed=None) ->
         grad_ixs, grad_weights = [], []
 
         # Collect class stats
-        rs_stats.update(rs)
-        ys_stats.update(ys)
+        # rs_stats.update(rs)
+        # ys_stats.update(ys)
 
         for j_, y_, r_, x_ in zip(x_ids, ys, rs, xs):
-            # loss = max(0, 1 + (-dr) - Wyx.elem_get(j_))
-            # TODO: use wrx from dists
-            wrx = W.sparse_dot(r_, x_)
-            wyx = W.sparse_dot(y_, x_)
-            loss = 1 + wrx - wyx
+            if use_dummy_loss:
+                loss = 1
+            else:
+                # loss = max(0, 1 + (-dr) - Wyx.elem_get(j_))
+                # TODO: use wrx from dists
+                wrx = W.sparse_dot(r_, x_)
+                wyx = W.sparse_dot(y_, x_)
+                loss = 1 + wrx - wyx
             if loss > 0:
                 grad_ixs.append((y_, j_))
                 grad_weights.append(+eta / k)
@@ -339,12 +376,13 @@ def multi_pegasos(X: np.array, y: np.array, lasso_svm=True, random_seed=None) ->
             amax_update[class_ix] = upd
         # Do soft thresholding for lasso SVM
         if lasso_svm:
-            # TODO: change gamma parameter dynamically
             W_ixs = list(set(ys) | set(rs))
-            th = 0.000005 * n_classes / len(W_ixs) * lambd * eta
-            for class_ix in W_ixs:
-                upd = W.soft_threshold(class_ix, th)
-                amax_update[class_ix] = upd
+            sparsity = W.nnz / W.dim[0] / W.dim[1]
+            th = gamma * n_classes / len(W_ixs) * lambd * eta
+            if th > 0:
+                for class_ix in W_ixs:
+                    upd = W.soft_threshold(class_ix, th)
+                    amax_update[class_ix] = upd
 
         # Normalize weight matrix and Wyx cache matrix
         if not lasso_svm:
@@ -367,9 +405,9 @@ def multi_pegasos(X: np.array, y: np.array, lasso_svm=True, random_seed=None) ->
         iter_end = time.time()
         learning_time += iter_end - iter_start
 
-        if i % 500 == 0 and i > 0:
+        if i % 1 == 0 and i > 0:
             # Save intermediate W matrix
-            with open("W_%s.dump" % dataset_name, "wb") as fout:
+            with open("W_%s.dump" % dataset_filename, "wb") as fout:
                 pickle.dump(W, fout)
             # Create test index :(
             # TODO: incapsulation is broken -- fix
@@ -385,10 +423,11 @@ def multi_pegasos(X: np.array, y: np.array, lasso_svm=True, random_seed=None) ->
             maf1_dot = f1_score(y_heldout, y_pred_heldout_dot, average="macro")
             mif1_dot = f1_score(y_heldout, y_pred_heldout_dot, average="micro")
             stats = [i, learning_time, maf1, mif1, maf1_dot, mif1_dot, amax_multiplier, nnz_sum, sparsity]
-            with open("log_%s.txt" % dataset_name, "a") as fout:
+            with open("log_%s_%d.txt" % (dataset_filename, os.getpid()), "a") as fout:
                 writer = csv.writer(fout)
                 writer.writerow(stats)
 
+    print("MaxRSS (in bytes): %d" % resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
     return W, (ys_stats, rs_stats)
 
 
@@ -396,7 +435,7 @@ if __name__ == "__main__":
     # Train
     print("processing %s ... (lasso = %d)" % (dataset_name, is_lasso))
     W, stats = multi_pegasos(X_train, y_train, lasso_svm=is_lasso, random_seed=0)
-    with open("W_%s.dump" % dataset_name, "wb") as fout:
+    with open("W_%s.dump" % dataset_filename, "wb") as fout:
         pickle.dump((W, stats), fout)
     # clf = LogisticRegression(C=100.0, fit_intercept=False)
     # clf.fit(X_train, (y_train == pos_class))

@@ -3,6 +3,9 @@ import sys
 import ctypes
 import pickle
 import nmslib
+import resource
+import operator
+import functools
 import itertools
 import collections
 import numpy as np
@@ -17,6 +20,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.preprocessing import normalize
 from sklearn.metrics.pairwise import linear_kernel
 from sklearn.utils.extmath import safe_sparse_dot
+from sklearn.svm import LinearSVC
 from tqdm import tqdm
 from time import time
 from multiprocessing import Pool, RawArray
@@ -32,6 +36,7 @@ out_dir = "../data/parsed"
 # dataset_name = "LSHTC1"
 # dataset_name = "20newsgroups"
 dataset_name = sys.argv[1]
+algo_name = sys.argv[2]
 
 with open(os.path.join(out_dir, "%s_train.dump" % dataset_name), "rb") as fin:
     X_train = pickle.load(fin)
@@ -66,17 +71,6 @@ for i, y in enumerate(y_train):
     classes_cnt[y] += 1
 classes_cnt = np.array(classes_cnt)
 
-"""
-from sklearn.decomposition import TruncatedSVD
-svd = TruncatedSVD(n_components=2000, algorithm="arpack", random_state=0)
-X_train = X_train.astype(np.float32)
-svd.fit(X_train)
-
-X_train = ss.csr_matrix(svd.transform(X_train))
-X_heldout = ss.csr_matrix(svd.transform(X_heldout))
-X_test = ss.csr_matrix(svd.transform(X_test))
-"""
-
 X_train = ss.hstack([X_train, np.ones(X_train.shape[0]).reshape(-1, 1)])
 X_heldout = ss.hstack([X_heldout, np.ones(X_heldout.shape[0]).reshape(-1, 1)])
 X_test = ss.hstack([X_test, np.ones(X_test.shape[0]).reshape(-1, 1)])
@@ -84,60 +78,13 @@ X_train, X_heldout, X_test = ss.csr_matrix(X_train), ss.csr_matrix(X_heldout), s
 
 print("Init done")
 
-class WeightMatrix:
-    def __init__(self, dim):
-        self.dim = n, d = dim
-        self.a = 1.0
-        self.snorm = 0.
-        self.m = [ss.csr_matrix((1, d), dtype=np.float32) for _ in range(n)]
-
-    def sparse_dot(self, ix: int, v: ss.csr_matrix):
-        return sparse_sparse_dot(self.m[ix], v) * self.a
-
-    def sparse_add(self, ix: int, v: ss.csr_matrix, s: float):
-        old_ix_norm = np.dot(self.m[ix].data, self.m[ix].data)
-        self.m[ix] += v * (s / self.a)
-        new_ix_norm = np.dot(self.m[ix].data, self.m[ix].data)
-        self.snorm += (new_ix_norm - old_ix_norm) * (self.a * self.a)
-        return self.m[ix] * self.a
-
-    def scale(self, s: float):
-        if abs(s) < 1e-32:
-            self.__init__(self.dim)
-        else:
-            self.a *= s
-            self.snorm *= (s*s)
-
-wm_filename = sys.argv[2] if len(sys.argv) > 2 else "W_%s.dump" % dataset_name
-with open(wm_filename, "rb") as fin:
-    W, _ = pickle.load(fin)
-    # W = pickle.load(fin)
-
-# normalize all vectors
-W.a /= W.a * np.sqrt(max([np.dot(x.data, x.data) for x in W.m]))
-
-Ws = ss.vstack(W.m) * W.a
-
-print("Reading weight matrix done")
-
 def chunks(l, n):
     """Yield successive n-sized chunks from l."""
     for i in range(0, l.shape[0], n):
         yield l[i:i + n]
 
 chunk_size = 1000
-# WsT = ss.csr_matrix(Ws.T)
 num_threads = 16
-
-def predict_ANN(X):
-    y_pred = []
-    for x_chunk in tqdm(chunks(X, chunk_size)):
-        results = index.knnQueryBatch(x_chunk, k=num_candidates, num_threads=num_threads)
-        for x, (nn_ids, _) in zip(x_chunk, results):
-            ix = 0
-            class_id = nn_ids[ix]
-            y_pred.append(class_id)
-    return y_pred
 
 def share_np_array(arr):
     if arr.dtype == np.float64:
@@ -146,55 +93,64 @@ def share_np_array(arr):
         ctype = ctypes.c_int
     else:
         raise NotImplementedError
-    sharr = RawArray(ctype, len(arr))
+    arr_size = functools.reduce(operator.mul, arr.shape, 1)
+    sharr = RawArray(ctype, arr_size)
     sharr_np = np.frombuffer(sharr, dtype=arr.dtype).reshape(arr.shape)
     np.copyto(sharr_np, arr)
-    return sharr
+    return (('shape', arr.shape), ('dtype', arr.dtype), ('data', sharr))
 
-def share_sparse_array(sparr):
-    shsparr = {}
-    shsparr["shape"] = sparr.shape
-    for k, v in {"data": sparr.data, "indices": sparr.indices, "indptr": sparr.indptr}.items():
-        shsparr[k] = (share_np_array(v), v.dtype, len(v))
-    return tuple(shsparr.items())
+def load_np_array(sharr):
+    sharr = dict(sharr)
+    arr_size = functools.reduce(operator.mul, sharr["shape"], 1)
+    arr = np.frombuffer(sharr["data"], dtype=sharr["dtype"], count=arr_size).reshape(sharr["shape"])
+    return arr
 
-def load_sparse_matrix(shsparr):
-    shsparr = dict(shsparr)
-    sparr = {}
-    sparr["shape"] = shsparr["shape"]
-    del shsparr["shape"]
-    for k, (sharr, dtype, count) in shsparr.items():
-        sparr[k] = np.frombuffer(sharr, dtype=dtype, count=count)
-    spmat = ss.csr_matrix((sparr["data"], sparr["indices"], sparr["indptr"]), shape=sparr["shape"], copy=False)
-    return spmat
-
-Ws_shared = share_sparse_array(Ws)
-Ws_worker = None
+W_shared = None
+W_worker = None
 
 def init_worker(args):
-    global Ws_worker
-    Ws_worker = load_sparse_matrix(args)
+    global W_worker
+    W_worker = load_np_array(args)
 
 def worker_func(x):
-    return cosine_similarity(x, Ws_worker).argmax(axis=1)
+    # return cosine_similarity(x, W_worker).argmax(axis=1)
+    return np.array(ss.csr_matrix.dot(W_worker, ss.csr_matrix(x.T)).argmax(axis=0))
 
-def predict_NN(X, metric="cosine"):
-    if metric != "cosine":
+def predict_NN(X, metric="dot"):
+    if metric != "dot":
         raise NotImplementedError
-    with Pool(processes=num_threads, initializer=lambda *x: init_worker(x), initargs=Ws_shared) as pool:
+    with Pool(processes=num_threads, initializer=lambda *x: init_worker(x), initargs=W_shared) as pool:
         result = pool.map(worker_func, chunks(X, chunk_size))
         y_pred = list(itertools.chain.from_iterable(result))
     return y_pred
 
-t1 = time()
-y_pred_test = predict_NN(X_test, metric="cosine")
-t2 = time()
+if algo_name == "ova":
+    clf = LinearSVC(C=10, multi_class="ovr", fit_intercept=False)
+elif algo_name == "msvm":
+    clf = LinearSVC(C=1, multi_class="crammer_singer", fit_intercept=False)
+else:
+    raise NotImplementedError
+
+t11 = time()
+clf.fit(X_train, y_train)
+t12 = time()
+W_shared = share_np_array(clf.coef_)
+del clf
+print("Training done")
+
+t21 = time()
+y_pred_test = predict_NN(X_test, metric="dot")
+t22 = time()
 print("Predicting done")
 print()
 
 maf1 = f1_score(y_test, y_pred_test, average="macro")
 mif1 = f1_score(y_test, y_pred_test, average="micro")
 
-print("Prediction time = %.1f" % (t2 - t1))
-print("Macro F1 (cosine simil) = %.6f" % maf1)
-print("Micro F1 (cosine simil) = %.6f" % mif1)
+memory_usage = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+
+print("Training time = %.1f" % (t12 - t11))
+print("Prediction time = %.1f" % (t22 - t21))
+print("Total memory (in bytes) = %d" % memory_usage)
+print("Micro F1 (dot product) = %.6f" % mif1)
+print("Macro F1 (dot product) = %.6f" % maf1)
