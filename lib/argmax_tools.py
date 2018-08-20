@@ -65,8 +65,8 @@ class RandomArgmax(BaseArgmax):
 
 
 class ANNArgmax(BaseArgmax):
-    def __init__(self, n_classes,  num_threads,  method="sw-graph", is_sparse=True,
-                 LSH=False, n_features = None, hash_length = 256):
+    def __init__(self, n_classes, num_threads, method="sw-graph", is_sparse=True,
+                 LSH=False, n_features=None, hash_length=256):
         if LSH:
             if n_features is None:
                 raise AttributeError("n_features is not defined")
@@ -88,11 +88,11 @@ class ANNArgmax(BaseArgmax):
         if len(self.not_present) > 0:
             return random.sample(self.not_present, 1)[0]
 
-    def query(self, xs, ys, num_threads=4):
+    def query(self, xs, ys):
         if hasattr(self, "lsh"):
             xs = self.lsh.transform(xs)
 
-        results = self.index.knnQueryBatch(xs, k=2, num_threads=num_threads)
+        results = self.index.knnQueryBatch(xs, k=2, num_threads=self.num_threads)
         indices = []
         # dists = []
         for (ixs, ds), y_ in zip(results, ys):
