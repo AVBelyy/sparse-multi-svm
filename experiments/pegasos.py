@@ -278,7 +278,7 @@ def multi_pegasos(X: np.array, y: np.array, lasso_svm=True, random_seed=None) ->
     n, d = X.shape
 
     # TODO: make parameters
-    max_iter = 41
+    max_iter = 40
     eta0 = 0.1
     eta_decay_rate = 0.02
 
@@ -313,7 +313,7 @@ def multi_pegasos(X: np.array, y: np.array, lasso_svm=True, random_seed=None) ->
     ys_stats = collections.Counter()
 
     with open("log_%s_%d.txt" % (dataset_filename, os.getpid()), "w") as fout:
-        fout.write("i,learning_time,maf1,mif1,maf1_dot,mif1_dot,amax_multiplier,nnz_sum,sparsity\n")
+        fout.write("i,learning_time,maf1,mif1,amax_multiplier,nnz_sum,sparsity\n")
 
     # a, b = 0., 0.
     for i in tqdm(range(max_iter)):
@@ -405,10 +405,10 @@ def multi_pegasos(X: np.array, y: np.array, lasso_svm=True, random_seed=None) ->
         iter_end = time.time()
         learning_time += iter_end - iter_start
 
-        if i % 1 == 0 and i > 0:
+        if i % 100500 == 0 and i > 0:
             # Save intermediate W matrix
-            with open("W_%s.dump" % dataset_filename, "wb") as fout:
-                pickle.dump(W, fout)
+            # with open("W_%s.dump" % dataset_filename, "wb") as fout:
+            #     pickle.dump(W, fout)
             # Create test index :(
             # TODO: incapsulation is broken -- fix
             # Calculate MaF1 and MiF1 heldout score
@@ -417,12 +417,12 @@ def multi_pegasos(X: np.array, y: np.array, lasso_svm=True, random_seed=None) ->
             Ws = ss.vstack(W.m) * W.a
             WsT = ss.csr_matrix(Ws.T)
             y_pred_heldout = predict_NN(X_heldout, Ws, WsT, metric="cosine")
-            y_pred_heldout_dot = predict_NN(X_heldout, Ws, WsT, metric="dot")
+            # y_pred_heldout_dot = predict_NN(X_heldout, Ws, WsT, metric="dot")
             maf1 = f1_score(y_heldout, y_pred_heldout, average="macro")
             mif1 = f1_score(y_heldout, y_pred_heldout, average="micro")
-            maf1_dot = f1_score(y_heldout, y_pred_heldout_dot, average="macro")
-            mif1_dot = f1_score(y_heldout, y_pred_heldout_dot, average="micro")
-            stats = [i, learning_time, maf1, mif1, maf1_dot, mif1_dot, amax_multiplier, nnz_sum, sparsity]
+            # maf1_dot = f1_score(y_heldout, y_pred_heldout_dot, average="macro")
+            # mif1_dot = f1_score(y_heldout, y_pred_heldout_dot, average="micro")
+            stats = [i, learning_time, maf1, mif1, amax_multiplier, nnz_sum, sparsity]
             with open("log_%s_%d.txt" % (dataset_filename, os.getpid()), "a") as fout:
                 writer = csv.writer(fout)
                 writer.writerow(stats)
