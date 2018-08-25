@@ -66,13 +66,14 @@ class RandomArgmax(BaseArgmax):
 
 class ANNArgmax(BaseArgmax):
     def __init__(self, n_classes, num_threads, method="sw-graph", is_sparse=True,
-                 LSH=False, n_features=None, hash_length=256):
-        if LSH:
+                 is_lsh=False, n_features=None, hash_length=256):
+        if is_lsh:
             if n_features is None:
                 raise AttributeError("n_features is not defined")
             self.lsh = SimpleLSH(n_features=n_features, hash_length=hash_length)
             self.index = nmslib.init(method=method, space="bit_hamming",
-                                     data_type=nmslib.DataType.DENSE_VECTOR)
+                                     dtype=nmslib.DistType.INT,
+                                     data_type=nmslib.DataType.OBJECT_AS_STRING)
         elif is_sparse:
             self.index = nmslib.init(method=method, space="negdotprod_sparse_fast",
                                      data_type=nmslib.DataType.SPARSE_VECTOR)
@@ -90,7 +91,7 @@ class ANNArgmax(BaseArgmax):
 
     def query(self, xs, ys):
         if hasattr(self, "lsh"):
-            xs = self.lsh.transform(xs)
+            xs = [self.lsh.transform(x) for x in xs]
 
         results = self.index.knnQueryBatch(xs, k=2, num_threads=self.num_threads)
         indices = []
@@ -114,10 +115,10 @@ class ANNArgmax(BaseArgmax):
             # dists.append(dist)
         return indices
 
-    def update(self, ixs: np.ndarray, new_values: ss.csr_matrix):
+    def update(self, ixs, new_values):
         # print("to del: ", ixs_del)
         if hasattr(self, "lsh"):
-            new_values = self.lsh.transform(new_values)
+            new_values = [self.lsh.transform(nv) for nv in new_values]
 
         ixs_set = set(ixs)
         ixs_del = list(self.present & ixs_set)
@@ -125,12 +126,16 @@ class ANNArgmax(BaseArgmax):
         self.index.deleteBatch(ixs_del, del_strategy)
         self.not_present -= ixs_set
         # print("to add: ", ixs, " cur: ", self.present)
-        ixs_nz, ixs_z = [], []
-        for ix, v in enumerate(new_values):
-            if v.nnz == 0:
-                ixs_z.append(ix)
-            else:
-                ixs_nz.append(ix)
-        self.index.addBatch(new_values[ixs_nz], ixs[ixs_nz])
-        self.present |= set(ixs[ixs_nz])
-        self.present -= set(ixs[ixs_z])
+        if hasattr(self, "lsh"):
+            self.index.addBatch(new_values, ixs)
+            self.present |= set(ixs)
+        else:
+            ixs_nz, ixs_z = [], []
+            for ix, v in enumerate(new_values):
+                if v.nnz == 0:
+                    ixs_z.append(ix)
+                else:
+                    ixs_nz.append(ix)
+            self.index.addBatch(new_values[ixs_nz], ixs[ixs_nz])
+            self.present |= set(ixs[ixs_nz])
+            self.present -= set(ixs[ixs_z])
