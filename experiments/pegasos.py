@@ -13,7 +13,6 @@ import time
 from sklearn.feature_extraction.text import TfidfTransformer
 from sklearn.metrics import f1_score
 from sklearn.metrics.pairwise import cosine_similarity
-from sklearn.preprocessing import normalize
 
 from lib.sparse_tools import dense_sparse_dot, dense_sparse_add, sparse_sparse_dot
 from lib.argmax_tools import ANNArgmax, BruteforceArgmax, RandomArgmax
@@ -21,85 +20,85 @@ from tqdm import tqdm
 
 from typing import Tuple
 
-# Read the dataset.
-out_dir = "../data/parsed"
+if __name__  == "__main__":
+    # Read the dataset.
+    in_dir = "../data/parsed"
 
-# dataset_name = "WIKI_100K"
-dataset_name = "LSHTC1"
-is_lasso = False
-gamma = 0.000005
-# dataset_name = "20newsgroups"
-if len(sys.argv) > 1:
-    dataset_name = sys.argv[1]
-if len(sys.argv) > 2:
-    is_lasso = (sys.argv[2] == "lasso")
-if len(sys.argv) > 3:
-    gamma = float(sys.argv[3])
+    # dataset_name = "WIKI_100K"
+    dataset_name = "LSHTC1"
+    is_lasso = False
+    gamma = 0.000005
+    # dataset_name = "20newsgroups"
+    if len(sys.argv) > 1:
+        dataset_name = sys.argv[1]
+    if len(sys.argv) > 2:
+        is_lasso = (sys.argv[2] == "lasso")
+    if len(sys.argv) > 3:
+        gamma = float(sys.argv[3])
 
-num_threads = 16
+    num_threads = 16
 
-if is_lasso:
-    dataset_filename = "%s_lasso" % dataset_name
-else:
-    dataset_filename = dataset_name
+    if is_lasso:
+        dataset_filename = "%s_lasso" % dataset_name
+    else:
+        dataset_filename = dataset_name
 
-use_class_sampling = True
-use_dummy_loss = not is_lasso
+    use_class_sampling = True
+    use_dummy_loss = not is_lasso
 
-with open(os.path.join(out_dir, "%s_train.dump" % dataset_name), "rb") as fin:
-    X_train = pickle.load(fin)
-with open(os.path.join(out_dir, "%s_train_out.dump" % dataset_name), "rb") as fin:
-    y_train = pickle.load(fin)
-with open(os.path.join(out_dir, "%s_heldout.dump" % dataset_name), "rb") as fin:
-    X_heldout = pickle.load(fin)
-with open(os.path.join(out_dir, "%s_heldout_out.dump" % dataset_name), "rb") as fin:
-    y_heldout = pickle.load(fin)
-with open(os.path.join(out_dir, "%s_test.dump" % dataset_name), "rb") as fin:
-    X_test = pickle.load(fin)
-with open(os.path.join(out_dir, "%s_test_out.dump" % dataset_name), "rb") as fin:
-    y_test = pickle.load(fin)
+    with open(os.path.join(in_dir, "%s_train_out.dump" % dataset_name), "rb") as fin:
+        y_train = pickle.load(fin)
+    with open(os.path.join(in_dir, "%s_heldout_out.dump" % dataset_name), "rb") as fin:
+        y_heldout = pickle.load(fin)
+    with open(os.path.join(in_dir, "%s_test_out.dump" % dataset_name), "rb") as fin:
+        y_test = pickle.load(fin)
+    with open(os.path.join(in_dir, "%s_train.dump" % dataset_name), "rb") as fin:
+        X_train = pickle.load(fin)
+    with open(os.path.join(in_dir, "%s_heldout.dump" % dataset_name), "rb") as fin:
+        X_heldout = pickle.load(fin)
+    with open(os.path.join(in_dir, "%s_test.dump" % dataset_name), "rb") as fin:
+        X_test = pickle.load(fin)
 
-n_classes = 0
-for dataset_part in ("train", "heldout", "test"):
-    with open(os.path.join(out_dir, "%s_%s_out.dump" % (dataset_name, dataset_part)), "rb") as fin:
-        labels = pickle.load(fin)
-        n_classes = max(n_classes, max(labels) + 1)
+    n_classes = 0
+    for dataset_part in ("train", "heldout", "test"):
+        with open(os.path.join(in_dir, "%s_%s_out.dump" % (dataset_name, dataset_part)), "rb") as fin:
+            labels = pickle.load(fin)
+            n_classes = max(n_classes, max(labels) + 1)
 
-tfidf = TfidfTransformer()
-tfidf.fit(X_train)
-X_train = tfidf.transform(X_train, copy=False)
-X_heldout = tfidf.transform(X_heldout, copy=False)
-X_test = tfidf.transform(X_test, copy=False)
+    tfidf = TfidfTransformer()
+    tfidf.fit(X_train)
+    X_train = tfidf.transform(X_train, copy=False)
+    X_heldout = tfidf.transform(X_heldout, copy=False)
+    X_test = tfidf.transform(X_test, copy=False)
 
-"""
-t11 = time.time()
-from sklearn.decomposition import TruncatedSVD
-svd = TruncatedSVD(n_components=2000, algorithm="arpack", random_state=0)
-X_train = X_train.astype(np.float32)
-svd.fit(X_train)
+    """
+    t11 = time.time()
+    from sklearn.decomposition import TruncatedSVD
+    svd = TruncatedSVD(n_components=2000, algorithm="arpack", random_state=0)
+    X_train = X_train.astype(np.float32)
+    svd.fit(X_train)
 
-X_train = ss.csr_matrix(svd.transform(X_train))
-X_heldout = ss.csr_matrix(svd.transform(X_heldout))
-X_test = ss.csr_matrix(svd.transform(X_test))
-t12 = time.time()
-"""
+    X_train = ss.csr_matrix(svd.transform(X_train))
+    X_heldout = ss.csr_matrix(svd.transform(X_heldout))
+    X_test = ss.csr_matrix(svd.transform(X_test))
+    t12 = time.time()
+    """
 
-print("I have PID", os.getpid())
+    print("I have PID", os.getpid())
 
-X_train = ss.hstack([X_train, np.ones(X_train.shape[0]).reshape(-1, 1)])
-X_heldout = ss.hstack([X_heldout, np.ones(X_heldout.shape[0]).reshape(-1, 1)])
-X_test = ss.hstack([X_test, np.ones(X_test.shape[0]).reshape(-1, 1)])
-X_train, X_heldout, X_test = ss.csr_matrix(X_train), ss.csr_matrix(X_heldout), ss.csr_matrix(X_test)
+    X_train = ss.hstack([X_train, np.ones(X_train.shape[0]).reshape(-1, 1)])
+    X_heldout = ss.hstack([X_heldout, np.ones(X_heldout.shape[0]).reshape(-1, 1)])
+    X_test = ss.hstack([X_test, np.ones(X_test.shape[0]).reshape(-1, 1)])
+    X_train, X_heldout, X_test = ss.csr_matrix(X_train), ss.csr_matrix(X_heldout), ss.csr_matrix(X_test)
 
-classes_objects = collections.defaultdict(list)
-classes_cnt = [0] * n_classes
-for i, y in enumerate(y_train):
-    classes_objects[y].append(i)
-    classes_cnt[y] += 1
-classes_cnt = np.array(classes_cnt)
+    classes_objects = collections.defaultdict(list)
+    classes_cnt = [0] * n_classes
+    for i, y in enumerate(y_train):
+        classes_objects[y].append(i)
+        classes_cnt[y] += 1
+    classes_cnt = np.array(classes_cnt)
 
-predict_chunk_size = 1000
-
+    predict_chunk_size = 1000
 
 def chunks(l, n):
     """Yield successive n-sized chunks from l."""
@@ -278,7 +277,7 @@ def multi_pegasos(X: np.array, y: np.array, lasso_svm=True, lsh_ann=False, rando
     n, d = X.shape
 
     # TODO: make parameters
-    max_iter = 40
+    max_iter = 25
     eta0 = 0.1
     eta_decay_rate = 0.02
 
@@ -418,7 +417,7 @@ def multi_pegasos(X: np.array, y: np.array, lasso_svm=True, lsh_ann=False, rando
             nnz_sum = sum([x.nnz for x in W.m])
             sparsity = nnz_sum / (len(W.m) * W.m[0].shape[1])
             Ws = ss.vstack(W.m) * W.a
-            WsT = ss.csr_matrix(Ws.T)
+            WsT = None # ss.csr_matrix(Ws.T)
             y_pred_heldout = predict_NN(X_heldout, Ws, WsT, metric="cosine")
             # y_pred_heldout_dot = predict_NN(X_heldout, Ws, WsT, metric="dot")
             maf1 = f1_score(y_heldout, y_pred_heldout, average="macro")
@@ -430,7 +429,8 @@ def multi_pegasos(X: np.array, y: np.array, lasso_svm=True, lsh_ann=False, rando
                 writer = csv.writer(fout)
                 writer.writerow(stats)
 
-    print("MaxRSS (in bytes): %d" % resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+    print("Learning time: %.1f" % learning_time)
+    print("Non-zero elements: %d" % W.nnz)
     return W, (ys_stats, rs_stats)
 
 
